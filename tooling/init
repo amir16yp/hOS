@@ -1,0 +1,31 @@
+#!/bin/sh
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin HOME=/root SHELL=/bin/bash TERM=linux
+mount -t devtmpfs devtmpfs /dev || echo 'ERROR: unable to mount devtmpfs' >/dev/console
+mount -t proc proc /proc || echo 'ERROR: unable to mount procfs' >/dev/console
+mount -t sysfs sysfs /sys || echo 'ERROR: unable to mount sysfs' >/dev/console
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+mkdir -p /dev/dri /dev/input
+# Where the init services keep their sockets, configuration and state.
+mkdir -p /run/hos /etc/hos /var/lib/hos
+case " $(cat /proc/cmdline) " in
+    *" hos.ramboot=1 "*)
+        echo 'RAM installer boot: kernel and installer files are available from memory.'
+        ;;
+esac
+case " $(cat /proc/cmdline) " in
+    *" hos.text=1 "*)
+        echo 'hOS diagnostic shell (HOSWM was not started).'
+        echo 'Use dmesg to inspect boot logs and ls /dev/fb* to check framebuffers.'
+        exec /bin/setsid --fork --wait --ctty /bin/bash --login </dev/tty1 >/dev/tty1 2>&1
+        ;;
+esac
+cat <<'BANNER'
+hOS live installer 0.1
+Live system ready. Click Install hOS (HD) in the HOSWM dock
+to choose a disk, configure the system and install hOS.
+BANNER
+hoswm
+status=$?
+echo "HOSWM stopped (status $status). Type 'hoswm' to restart and open the installer from the dock."
+exec /bin/setsid --fork --wait --ctty /bin/bash --login </dev/tty1 >/dev/tty1 2>&1

@@ -1,0 +1,11 @@
+/.build/
+__pycache__/
+/HOSWM/target/
+*.iso
+*.qcow2
+*.raw
+
+# Local editor and operating-system files
+.DS_Store
+*.swp
+*.swo

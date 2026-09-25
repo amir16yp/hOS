@@ -1,0 +1,5 @@
+# Shell scripts need Unix line endings for their shebangs to work on Linux.
+*.sh text eol=lf
+/tooling/init text eol=lf
+/tooling/bash.bashrc text eol=lf
+/tooling/inputrc text eol=lf

@@ -1,0 +1,37 @@
+[package]
+name = "hoswm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+
+[profile.release]
+panic = "abort"
+lto = true
+strip = true
+
+# The init system and its services live under src/init.
+[[bin]]
+name = "hos-init"
+path = "src/init/bin/hos-init.rs"
+
+[[bin]]
+name = "hos-netd"
+path = "src/init/bin/hos-netd.rs"
+
+[[bin]]
+name = "hos-power"
+path = "src/init/bin/hos-power.rs"
+
+[[bin]]
+name = "hos-ntpd"
+path = "src/init/bin/hos-ntpd.rs"
+
+[[bin]]
+name = "hos-soundd"
+path = "src/init/bin/hos-soundd.rs"
+
+[[bin]]
+name = "hosctl"
+path = "src/init/bin/hosctl.rs"
