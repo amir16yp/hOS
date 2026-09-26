@@ -1,4 +1,11 @@
-# hOS 0.1
+
+## Screenshots
+<img width="1281" height="878" alt="image" src="https://github.com/user-attachments/assets/826658a1-b1d7-44d1-ac22-794c7f167fda" />
+<img width="1281" height="878" alt="image" src="https://github.com/user-attachments/assets/d28c894c-1f1c-4a00-8753-07385c70fa57" />
+<img width="1281" height="878" alt="image" src="https://github.com/user-attachments/assets/52ec88fd-dbbd-4aa4-9e14-0e28fef0ce3e" />
+<img width="1281" height="878" alt="image" src="https://github.com/user-attachments/assets/53bb5cbf-719d-4503-92e2-fff506d080ae" />
+
+
 
 hOS is a custom x86_64 Linux-based operating system project with a Bash and uutils userspace, a BIOS-bootable live installer, and HOSWM: a Rust desktop and window server that draws directly to the Linux framebuffer. The current implementation includes movable windows, a shell terminal, bitmap text, and a C API for graphical applications. It runs without Xorg, Wayland, or a GPU-accelerated compositor.
 
