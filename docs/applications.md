@@ -43,12 +43,16 @@ Coordinates describe window content pixels, excluding the title bar and border. 
 | `hos_session_info` | Query ABI version and logical desktop width/height; output pointers may be NULL |
 | `hos_gui_remove_control` | Remove a control, clear its focus/press state and discard its queued click/change/submit events |
 | `hos_window_create`, `hos_gui_window_create` | Create a window; the GUI name is an alias |
+| `hos_window_create_with_size` | Create a window with separate internal render and final display sizes |
 | `hos_message_box` | Create a message window with dismissal controls |
 | `hos_window_close` | Close a window |
 | `hos_window_set_flags` | Enable raw input, deferred close requests, protection from session exit during critical work, or user resizing |
+| `hos_window_set_fps` | Set the window's requested update/render rate from 1 to 240 FPS |
 | `hos_clipboard_set`, `hos_clipboard_get` | Share UTF-8 text through the session clipboard |
 | `hos_window_size` | Query current content width, height and minimized state |
+| `hos_window_size_info` | Query internal render size, final display size, minimized state and FPS |
 | `hos_window_present` | Submit a complete pixel buffer matching the current content size |
+| `hos_window_run` | Run the client's update and render callbacks at the requested FPS |
 | `hos_window_poll` | Remove one queued event, or report no event |
 | `hos_gui_control` | Create or replace a control by ID |
 | `hos_gui_label`, `hos_gui_button`, `hos_gui_textbox` | Convenience control constructors |
@@ -59,7 +63,7 @@ Coordinates describe window content pixels, excluding the title bar and border. 
 
 Create windows with content widths of **180–796** and heights of **60–498** pixels. Titles allow up to 128 bytes; message bodies allow 2,048 bytes; control text allows 1,024 bytes. Control IDs must be nonzero and are local to a window. Control dimensions must be at least 16×12 and fit within the server's 796×498 control coordinate bounds; controls outside the current content are clipped.
 
-A window can be maximized and restored by the user. A window that sets `HOS_WINDOW_RESIZABLE` can also be resized by dragging any edge or corner of its frame, which the window manager marks with a grip in the bottom-right corner; the grab band reaches a few pixels outside the frame. Resizing keeps the window on the desktop and stops at the 180x60 minimum content size, and a maximized window is resized with its restore button instead. Each new size arrives as `HOS_EVENT_RESIZE` and is reported by `hos_window_size`. Pixel clients should query dimensions after a resize and present a buffer with that exact size. GUI controls use fixed coordinates and do not automatically reflow, which is why a window whose layout is fixed, such as a message box, leaves the flag off. The bundled terminal sets it and reflows its grid onto the new size.
+A window can be maximized and restored by the user. A window created with `hos_window_create_with_size` keeps its internal render size while the window manager scales it to the final frame, so maximizing never forces a client buffer to grow with the display. `hos_window_size_info` reports both sizes. A window that sets `HOS_WINDOW_RESIZABLE` can also be resized by dragging any edge or corner of its frame, which the window manager marks with a grip in the bottom-right corner; the grab band reaches a few pixels outside the frame. Resizing keeps the window on the desktop and stops at the 180x60 minimum content size, and a maximized window is resized with its restore button instead. Each new size arrives as `HOS_EVENT_RESIZE` and is reported by `hos_window_size`. Pixel clients should query dimensions after a resize and present a buffer with that exact internal size. `hos_window_set_fps` and `hos_window_run` let each client choose its own update/render cadence. GUI controls use fixed coordinates and do not automatically reflow, which is why a window whose layout is fixed, such as a message box, leaves the flag off. The bundled terminal sets it and reflows its grid onto the new size.
 
 ## Events
 
@@ -246,6 +250,10 @@ The wire format uses little-endian 32-bit integers. A request is a length prefix
 | 14 | Get session clipboard |
 | 15 | Show a notification (color, milliseconds, text); no window ID |
 | 16 | Set window menus (window ID, menu count, then per menu: title, item count, and per item: ID, flags, label, shortcut) |
+| 17 | Create answer dialog |
+| 18 | Create window with internal and final sizes |
+| 19 | Query internal size, final size, minimized state and FPS |
+| 20 | Set window FPS |
 
 Control removal returns `EPROTO` for an unknown window/control. IDs can be reused after removal. Opcodes 10–16 are additive extensions to ABI v1; older servers reject them with `EPROTO`.
 

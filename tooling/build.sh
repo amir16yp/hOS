@@ -4,7 +4,7 @@ source "$(dirname "$0")/env.sh"
 stage=${1:-all}
 # Every Rust program packaged beside the window server: the desktop
 # applications, the init system and its services.
-HOS_APPS='hos-terminal hos-installer hos-about hos-files hos-image hos-paint hos-colorpicker hos-notifications hos-toast hos-account hos-settings hos-init hos-netd hos-power hos-ntpd hos-soundd hosctl'
+HOS_APPS='hos-terminal hos-installer hos-about hos-files hos-image hos-paint hos-colorpicker hos-notifications hos-toast hos-account hos-settings hos-notepad hos-snake hos-init hos-netd hos-power hos-ntpd hos-soundd hosctl'
 case "$stage" in fetch|kernel|userspace|hoswm|iso|all) ;; *) fail 'Usage: tooling/build.sh [fetch|kernel|userspace|hoswm|iso|all]' ;; esac
 mkdir -p "$BUILD/downloads" "$BUILD/src" "$BUILD/out" "$BUILD/logs"
 fetch_archive() {

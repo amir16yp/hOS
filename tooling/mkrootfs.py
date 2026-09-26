@@ -79,6 +79,8 @@ for src, name in ((build / "out/coreutils", "bin/coreutils"),
                   (build / "out/hos-toast", "bin/hos-toast"),
                   (build / "out/hos-account", "bin/hos-account"),
                   (build / "out/hos-settings", "bin/hos-settings"),
+                  (build / "out/hos-notepad", "bin/hos-notepad"),
+                  (build / "out/hos-snake", "bin/hos-snake"),
                   # The init system's services and its command-line client.
                   (build / "out/hos-netd", "bin/hos-netd"),
                   (build / "out/hos-power", "bin/hos-power"),

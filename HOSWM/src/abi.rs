@@ -193,7 +193,7 @@ impl Server {
                         c.output.extend(body);
                         c.done = true;
                         let op = u32::from_le_bytes(c.input[4..8].try_into().unwrap());
-                        dirty |= matches!(op, 1..=4 | 6 | 7 | 10..=13 | 15..=17);
+                        dirty |= matches!(op, 1..=4 | 6 | 7 | 10..=13 | 15..=20);
                     }
                 }
             }
@@ -301,6 +301,18 @@ fn dispatch_as(d: &mut Desktop, bytes: &[u8], owner_pid: u32) -> Result<Vec<u8>,
         let message = r.text(2048)?;
         r.end()?;
         let id = d.ask(title, message, buttons, severity)?;
+        d.window(id).unwrap().owner_pid = owner_pid;
+        return Ok(ints(&[id]));
+    }
+    if op == 18 {
+        let internal_w = r.u32()? as i32;
+        let internal_h = r.u32()? as i32;
+        let final_w = r.u32()? as i32;
+        let final_h = r.u32()? as i32;
+        let color = r.u32()?;
+        let title = r.text(128)?;
+        r.end()?;
+        let id = d.create_sized(title, internal_w, internal_h, final_w, final_h, color)?;
         d.window(id).unwrap().owner_pid = owner_pid;
         return Ok(ints(&[id]));
     }
@@ -443,6 +455,25 @@ fn dispatch_as(d: &mut Desktop, bytes: &[u8], owner_pid: u32) -> Result<Vec<u8>,
                 w.content.height() as u32,
                 w.minimized as u32,
             ]));
+        }
+        19 => {
+            r.end()?;
+            return Ok(ints(&[
+                w.content.width() as u32,
+                w.content.height() as u32,
+                (w.rect.w - 4).max(0) as u32,
+                (w.rect.h - crate::desktop::TITLE - 2).max(0) as u32,
+                w.minimized as u32,
+                w.fps,
+            ]));
+        }
+        20 => {
+            let fps = r.u32()?;
+            r.end()?;
+            if !(1..=240).contains(&fps) {
+                return Err("invalid window FPS".into());
+            }
+            w.fps = fps;
         }
         9 => {
             let cid = r.u32()?;

@@ -51,19 +51,30 @@ extern "C" {
 
 typedef uint32_t HosWindow;
 typedef struct { uint32_t kind, control, text_length; char text[1025]; } HosEvent;
+typedef struct {
+    uint32_t internal_width, internal_height;
+    uint32_t final_width, final_height;
+    uint32_t minimized, fps;
+} HosWindowSize;
+typedef int (*HosWindowUpdateFn)(HosWindow window, const HosEvent *event, void *userdata);
+typedef int (*HosWindowRenderFn)(HosWindow window, const HosWindowSize *size, uint32_t *argb, size_t pixels, void *userdata);
 /* Menu bar entries. The window manager draws the menus of the focused window
  * across the top of the screen; choosing an item queues HOS_EVENT_MENU. */
 typedef struct { uint32_t id, flags; const char *label, *shortcut; } HosMenuItem;
 typedef struct { const char *title; const HosMenuItem *items; uint32_t item_count; } HosMenu;
 int hos_session_info(uint32_t *version, uint32_t *width, uint32_t *height);
 HosWindow hos_window_create(const char *title, uint32_t width, uint32_t height, uint32_t color);
+HosWindow hos_window_create_with_size(const char *title, uint32_t internal_width, uint32_t internal_height, uint32_t final_width, uint32_t final_height, uint32_t color);
 HosWindow hos_gui_window_create(const char *title, uint32_t width, uint32_t height, uint32_t color);
 HosWindow hos_message_box(const char *title, const char *message, uint32_t color);
 int hos_window_close(HosWindow window);
 int hos_window_set_flags(HosWindow window, uint32_t flags);
+int hos_window_set_fps(HosWindow window, uint32_t fps);
 int hos_clipboard_set(const char *text);
 int hos_clipboard_get(char *text, size_t capacity);
 int hos_window_size(HosWindow window, uint32_t *width, uint32_t *height, uint32_t *minimized);
+int hos_window_size_info(HosWindow window, HosWindowSize *size);
+int hos_window_run(HosWindow window, uint32_t fps, HosWindowUpdateFn update, HosWindowRenderFn render, void *userdata);
 int hos_window_present(HosWindow window, uint32_t width, uint32_t height, const uint32_t *argb);
 int hos_window_poll(HosWindow window, HosEvent *event); /* 1 event, 0 empty, -1 error */
 /* Show a notification in the session corner; 0 milliseconds uses the
@@ -169,6 +180,11 @@ int hos_window_set_flags(HosWindow window,uint32_t flags) {
     uint8_t req[12];hos_put(req,12);hos_put(req+4,window);hos_put(req+8,flags);
     return hos_call(req,sizeof(req),NULL,0,NULL);
 }
+int hos_window_set_fps(HosWindow window,uint32_t fps) {
+    if(fps<1||fps>240) {errno=EINVAL;return -1;}
+    uint8_t req[12];hos_put(req,20);hos_put(req+4,window);hos_put(req+8,fps);
+    return hos_call(req,sizeof(req),NULL,0,NULL);
+}
 int hos_clipboard_set(const char *text) {
     size_t n;if(hos_string_size(text,65536,&n)<0)return -1;
     uint8_t *req=(uint8_t *)malloc(8+n);if(!req)return -1;
@@ -189,6 +205,12 @@ HosWindow hos_window_create(const char *title,uint32_t width,uint32_t height,uin
     size_t n,got;uint8_t req[148],reply[4];if(hos_string_size(title,128,&n)<0)return 0;
     hos_put(req,1);hos_put(req+4,width);hos_put(req+8,height);hos_put(req+12,color);hos_put(req+16,(uint32_t)n);memcpy(req+20,title,n);
     if(hos_call(req,20+n,reply,4,&got)<0)return 0;
+    if(got!=4) {errno=EPROTO;return 0;}return hos_get(reply);
+}
+HosWindow hos_window_create_with_size(const char *title,uint32_t internal_width,uint32_t internal_height,uint32_t final_width,uint32_t final_height,uint32_t color) {
+    size_t n,got;uint8_t req[164],reply[4];if(hos_string_size(title,128,&n)<0)return 0;
+    hos_put(req,18);hos_put(req+4,internal_width);hos_put(req+8,internal_height);hos_put(req+12,final_width);hos_put(req+16,final_height);hos_put(req+20,color);hos_put(req+24,(uint32_t)n);memcpy(req+28,title,n);
+    if(hos_call(req,28+n,reply,4,&got)<0)return 0;
     if(got!=4) {errno=EPROTO;return 0;}return hos_get(reply);
 }
 HosWindow hos_gui_window_create(const char *title,uint32_t width,uint32_t height,uint32_t color) {return hos_window_create(title,width,height,color);}
@@ -251,6 +273,37 @@ int hos_window_set_menus(HosWindow window,const HosMenu *menus,uint32_t count) {
 int hos_window_size(HosWindow window,uint32_t *width,uint32_t *height,uint32_t *minimized) {
     uint8_t req[8],reply[12];size_t got;hos_put(req,8);hos_put(req+4,window);if(hos_call(req,8,reply,12,&got)<0)return -1;
     if(got!=12) {errno=EPROTO;return -1;}if(width)*width=hos_get(reply);if(height)*height=hos_get(reply+4);if(minimized)*minimized=hos_get(reply+8);return 0;
+}
+int hos_window_size_info(HosWindow window,HosWindowSize *size) {
+    uint8_t req[8],reply[24];size_t got;if(!size) {errno=EINVAL;return -1;}
+    hos_put(req,19);hos_put(req+4,window);if(hos_call(req,8,reply,sizeof(reply),&got)<0)return -1;
+    if(got!=sizeof(reply)) {errno=EPROTO;return -1;}
+    size->internal_width=hos_get(reply);size->internal_height=hos_get(reply+4);
+    size->final_width=hos_get(reply+8);size->final_height=hos_get(reply+12);
+    size->minimized=hos_get(reply+16);size->fps=hos_get(reply+20);return 0;
+}
+int hos_window_run(HosWindow window,uint32_t fps,HosWindowUpdateFn update,HosWindowRenderFn render,void *userdata) {
+    if(!update||!render||fps<1||fps>240) {errno=EINVAL;return -1;}
+    if(hos_window_set_fps(window,fps)<0)return -1;
+    uint32_t *pixels=NULL;size_t capacity=0;
+    for(;;) {
+        HosEvent event;int got;
+        do {
+            got=hos_window_poll(window,&event);if(got<0)goto fail;
+            if(got&&update(window,&event,userdata)==0)goto done;
+        } while(got);
+        if(update(window,NULL,userdata)==0)goto done;
+        HosWindowSize size;if(hos_window_size_info(window,&size)<0)goto fail;
+        size_t count=(size_t)size.internal_width*size.internal_height;
+        if(count>capacity) {uint32_t *next=(uint32_t *)realloc(pixels,count*sizeof(*pixels));if(!next)goto fail;pixels=next;capacity=count;}
+        if(!size.minimized) {
+            if(render(window,&size,pixels,count,userdata)==0)goto done;
+            if(hos_window_present(window,size.internal_width,size.internal_height,pixels)<0)goto fail;
+        }
+        poll(NULL,0,(int)(1000/fps));
+    }
+done: free(pixels);return 0;
+fail: {int error=errno;free(pixels);errno=error;return -1;}
 }
 int hos_window_present(HosWindow window,uint32_t width,uint32_t height,const uint32_t *argb) {
     if(!argb||width>796||height>500||width==0||height==0) {errno=EINVAL;return -1;}

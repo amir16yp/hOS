@@ -40,6 +40,15 @@ pub struct Event {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Window(pub u32);
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WindowSize {
+    pub internal_width: u32,
+    pub internal_height: u32,
+    pub final_width: u32,
+    pub final_height: u32,
+    pub minimized: bool,
+    pub fps: u32,
+}
 pub struct Client;
 impl Client {
     pub fn connect() -> io::Result<Self> {
@@ -79,6 +88,29 @@ impl Client {
         let b = self.call(&q)?;
         one(&b).map(Window)
     }
+    /// Create a window with a client pixel size independent of its displayed
+    /// content size. The server scales the completed internal frame to fit.
+    pub fn create_with_size(
+        &self,
+        title: &str,
+        internal_width: u32,
+        internal_height: u32,
+        final_width: u32,
+        final_height: u32,
+        color: u32,
+    ) -> io::Result<Window> {
+        let mut q = words(&[
+            18,
+            internal_width,
+            internal_height,
+            final_width,
+            final_height,
+            color,
+            title.len() as u32,
+        ]);
+        q.extend(title.as_bytes());
+        one(&self.call(&q)?).map(Window)
+    }
     pub fn close(&self, w: Window) -> io::Result<()> {
         let _ = self.call(&words(&[4, w.0]))?;
         Ok(())
@@ -102,6 +134,10 @@ impl Client {
             q.extend(p.to_le_bytes());
         }
         let _ = self.call(&q)?;
+        Ok(())
+    }
+    pub fn set_fps(&self, w: Window, fps: u32) -> io::Result<()> {
+        let _ = self.call(&words(&[20, w.0, fps]))?;
         Ok(())
     }
     pub fn poll(&self, w: Window) -> io::Result<Option<Event>> {
@@ -139,6 +175,56 @@ impl Client {
             ));
         }
         Ok((get(&b, 0), get(&b, 4), get(&b, 8) != 0))
+    }
+    pub fn size_info(&self, w: Window) -> io::Result<WindowSize> {
+        let b = self.call(&words(&[19, w.0]))?;
+        if b.len() != 24 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid window size response"));
+        }
+        Ok(WindowSize {
+            internal_width: get(&b, 0),
+            internal_height: get(&b, 4),
+            final_width: get(&b, 8),
+            final_height: get(&b, 12),
+            minimized: get(&b, 16) != 0,
+            fps: get(&b, 20),
+        })
+    }
+    /// Run a window with independent update and render callbacks. Returning
+    /// false from update exits the loop; render returns a complete internal
+    /// pixel buffer for the current internal size.
+    pub fn run<U, R>(&self, window: Window, fps: u32, mut update: U, mut render: R) -> io::Result<()>
+    where
+        U: FnMut(&[Event]) -> bool,
+        R: FnMut(WindowSize) -> Vec<u32>,
+    {
+        if !(1..=240).contains(&fps) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "FPS must be between 1 and 240"));
+        }
+        self.set_fps(window, fps)?;
+        let frame = Duration::from_secs_f64(1.0 / fps as f64);
+        let mut next = std::time::Instant::now();
+        loop {
+            let mut events = Vec::new();
+            while let Some(event) = self.poll(window)? {
+                events.push(event);
+            }
+            if !update(&events) {
+                return Ok(());
+            }
+            let size = self.size_info(window)?;
+            if !size.minimized {
+                let pixels = render(size);
+                self.present(window, size.internal_width, size.internal_height, &pixels)?;
+            }
+            next += frame;
+            let now = std::time::Instant::now();
+            if next > now {
+                std::thread::sleep(next - now);
+            } else {
+                next = now;
+            }
+        }
     }
     /// Open a message box with answer buttons. Poll it, or use [`Self::ask`].
     pub fn message(

@@ -12,7 +12,7 @@ use crate::{font::Font, surface::Surface};
 use std::collections::VecDeque;
 pub const BLACK: u32 = 0xff000000;
 pub const ACCENT: u32 = 0xff72dbac;
-const TITLE: i32 = 28;
+pub(crate) const TITLE: i32 = 28;
 /// Height reserved for the menu bar; windows never cover it.
 pub const MENUBAR: i32 = menu::HEIGHT;
 /// First row below the menu bar that a window may occupy.
@@ -103,6 +103,9 @@ pub struct Window {
     restore: Option<Rect>,
     pub minimized: bool,
     pub content: Surface,
+    /// The requested client update rate. The compositor may present less often
+    /// when the display is busy, but never uses this to enlarge the surface.
+    pub fps: u32,
     pub controls: Vec<Control>,
     /// Client opted into raw keyboard and pointer events through ABI operation 12.
     pub raw_input: bool,
@@ -607,24 +610,40 @@ impl Desktop {
         }
     }
     pub fn create(&mut self, title: String, w: i32, h: i32, color: u32) -> Result<u32, String> {
+        self.create_sized(title, w, h, w, h, color)
+    }
+    pub fn create_sized(
+        &mut self,
+        title: String,
+        internal_w: i32,
+        internal_h: i32,
+        final_w: i32,
+        final_h: i32,
+        color: u32,
+    ) -> Result<u32, String> {
         if self.windows.len() >= 24 {
             return Err("window limit reached".into());
         }
-        if !(180..=796).contains(&w) || !(60..=498).contains(&h) || title.len() > 128 {
+        if !(180..=796).contains(&internal_w)
+            || !(60..=498).contains(&internal_h)
+            || final_w < 180
+            || final_h < 60
+            || title.len() > 128
+        {
             return Err("invalid window dimensions or title".into());
         }
         let offset = (self.windows.len() % 6) as i32 * 20;
         let rect = Rect {
-            x: (50 + offset).min(self.screen_width - w - 4),
+            x: (50 + offset).min((self.screen_width - final_w - 4).max(0)),
             y: (40 + offset)
-                .min(self.floor() - h - TITLE - 2)
+                .min((self.floor() - final_h - TITLE - 2).max(top(&self.config)))
                 .max(top(&self.config)),
-            w: w + 4,
-            h: h + TITLE + 2,
+            w: final_w + 4,
+            h: final_h + TITLE + 2,
         };
         let id = self.next;
         self.next = self.next.checked_add(1).ok_or("window IDs exhausted")?;
-        let mut content = Surface::new(w as usize, h as usize);
+        let mut content = Surface::new(internal_w as usize, internal_h as usize);
         content.pixels_mut().fill(BLACK);
         self.windows.push(Window {
             id,
@@ -635,6 +654,7 @@ impl Desktop {
             restore: None,
             minimized: false,
             content,
+            fps: 60,
             controls: Vec::new(),
             raw_input: false,
             resizable: false,
@@ -1071,11 +1091,10 @@ impl Desktop {
                     w.rect = Rect {
                         x: 0,
                         y: ceiling,
-                        w: screen_width,
-                        h: floor - ceiling,
+                        w: screen_width.max(4),
+                        h: (floor - ceiling).max(TITLE + 2 + MIN_CONTENT.1),
                     };
                 }
-                w.resize();
             } else if x >= r.x + r.w - 78 {
                 w.minimized = true;
             } else if w.restore.is_none() {
@@ -1405,7 +1424,27 @@ impl Desktop {
                 }
                 content.draw_surface(cr.x, cr.y, tile);
             }
-            fb.draw_surface(r.x + 2, r.y + TITLE, content);
+            let content_w = (r.w - 4).max(0);
+            let content_h = (r.h - TITLE - 2).max(0);
+            if content.width() as i32 == content_w && content.height() as i32 == content_h {
+                fb.draw_surface(r.x + 2, r.y + TITLE, content);
+            } else {
+                // Maximized windows keep their client-selected internal
+                // resolution. Scale the finished client image, including GUI
+                // controls, into the final frame instead of allocating a
+                // potentially unbounded pixel buffer.
+                fb.draw_image_scaled(
+                    r.x + 2,
+                    r.y + TITLE,
+                    content_w,
+                    content_h,
+                    crate::surface::Image {
+                        width: content.width(),
+                        height: content.height(),
+                        pixels: content.pixels(),
+                    },
+                );
+            }
             // Over the content, so the corner grip stays visible: it is what
             // says the edges of this window can be dragged.
             if w.resizable && w.restore.is_none() {

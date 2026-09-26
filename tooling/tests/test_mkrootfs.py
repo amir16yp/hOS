@@ -33,7 +33,7 @@ def read_archive(path):
 def make_fixture(root):
     """Write everything mkrootfs.py packages; return its arguments and ldd output."""
     (root / "out").mkdir()
-    for name in ("coreutils", "coreutils-applets", "coreutils-LICENSE", "hos-password", "hos-init", "hoswm", "hos-hello", "hos-terminal", "hos-installer", "hos-about", "hos-files", "hos-image", "hos-notifications", "hos-toast", "hos-account", "hos-settings", "hos-netd", "hos-power", "hos-ntpd", "hos-soundd", "hosctl", "hoswm.h", "libhoswm.a", "vmlinuz"):
+    for name in ("coreutils", "coreutils-applets", "coreutils-LICENSE", "hos-password", "hos-init", "hoswm", "hos-hello", "hos-terminal", "hos-installer", "hos-about", "hos-files", "hos-image", "hos-notifications", "hos-toast", "hos-account", "hos-settings", "hos-notepad", "hos-snake", "hos-netd", "hos-power", "hos-ntpd", "hos-soundd", "hosctl", "hoswm.h", "libhoswm.a", "vmlinuz"):
         (root / "out" / name).write_bytes(name.encode())
     for name in ("hos-paint", "hos-colorpicker"):
         (root / "out" / name).write_bytes(name.encode())
@@ -116,7 +116,7 @@ class RootfsTests(unittest.TestCase):
             self.assertIn("etc/hos-live", entries)
             for name in ("bin/coreutils", "bin/hos-password", "bin/hos-init", "bin/hoswm", "bin/hos-hello",
                          "bin/hos-terminal", "bin/hos-installer", "bin/hos-about", "bin/hos-files", "bin/hos-image", "bin/hos-notifications",
-                         "bin/hos-toast", "bin/hos-account", "bin/hos-settings",
+                         "bin/hos-toast", "bin/hos-account", "bin/hos-settings", "bin/hos-notepad", "bin/hos-snake",
                          "bin/hos-paint", "bin/hos-colorpicker",
                          "bin/hos-netd", "bin/hos-power", "bin/hos-ntpd", "bin/hos-soundd", "bin/hosctl",
                          "usr/sbin/grub-install", "usr/sbin/grub-probe", "usr/bin/grub-mkimage",

@@ -58,7 +58,7 @@ The backend switches the console to graphics mode and restores its previous mode
 
 `src/bin/hos-terminal.rs` contains the terminal application and its PTY/ANSI screen model. It opens a Unix98 PTY, creates an interactive `/bin/sh` session with a controlling terminal, sets `TERM=ansi` and the `hos$ ` prompt, and communicates with HOSWM through the ABI. Window size changes update the PTY size. Closing the app triggers child cleanup.
 
-The screen model implements a subset of ANSI behavior, including cursor movement, erase operations, colors and scrolling. It is a small terminal emulator, not a complete modern terminal implementation. `src/bin/hos-installer.rs` contains the installer UI and worker; it protects the session from exit while disk writes are active. `src/bin/hos-about.rs` is the About application, `src/bin/hos-notifications.rs` browses the notification log with its own menu bar menus, and `src/bin/hos-toast.rs` posts a notification from a shell. `src/bin/hos-files.rs` is a tabbed file browser: it copies and moves whole directories through the session clipboard, starts a terminal in the directory it is showing, and draws image previews. `src/bin/hos-image.rs` views QOI images with zoom, panning and a choice of scaling, and generates the previews the browser reads; both share the cache in `preview.rs`.
+The screen model implements a subset of ANSI behavior, including cursor movement, erase operations, colors and scrolling. It is a small terminal emulator, not a complete modern terminal implementation. `src/bin/hos-installer.rs` contains the installer UI and worker; it protects the session from exit while disk writes are active. `src/bin/hos-about.rs` is the About application, `src/bin/hos-notifications.rs` browses the notification log with its own menu bar menus, and `src/bin/hos-toast.rs` posts a notification from a shell. `src/bin/hos-notepad.rs` is a small raw-input text editor with file loading and Ctrl+S saving. `src/bin/hos-snake.rs` is a self-contained keyboard-driven Snake game. `src/bin/hos-files.rs` is a tabbed file browser: it copies and moves whole directories through the session clipboard, starts a terminal in the directory it is showing, and draws image previews. `src/bin/hos-image.rs` views QOI images with zoom, panning and a choice of scaling, and generates the previews the browser reads; both share the cache in `preview.rs`.
 
 ## Build and packaging
 
@@ -94,6 +94,8 @@ The build starts from a minimal kernel configuration and requires storage, graph
 | `HOSWM/src/bin/hos-notifications.rs` | Notification log browser |
 | `HOSWM/src/bin/hos-toast.rs` | Command-line notification sender |
 | `HOSWM/src/bin/hos-settings.rs` | Settings application for the services and the session |
+| `HOSWM/src/bin/hos-notepad.rs` | Tiny text editor |
+| `HOSWM/src/bin/hos-snake.rs` | Tiny Snake game |
 | `HOSWM/src/audio.rs` | Application sound API: play a file, or write PCM |
 | `HOSWM/src/init/mod.rs`, `config/` | Service paths, configuration parsing and written defaults |
 | `HOSWM/src/init/ipc.rs` | The service protocol, its server loop and client |

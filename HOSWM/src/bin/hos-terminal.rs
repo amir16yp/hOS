@@ -258,9 +258,13 @@ mod terminal {
                         self.newline();
                     }
                     8 => {
+                        // BS only moves the cursor. Readline erases by
+                        // redrawing the line or by sending CSI P/K; erasing
+                        // here makes a later redraw look like insert mode.
                         self.x = self.x.saturating_sub(1);
                         self.wrap = false;
                     }
+                    127 => (), // DEL is ignored by a VT screen.
                     b'\t' => {
                         self.x = ((self.x / 8 + 1) * 8).min(self.cols - 1);
                         self.wrap = false;
@@ -343,6 +347,31 @@ mod terminal {
                         2 => self.cells[row..row + self.cols].fill(blank),
                         _ => (),
                     }
+                }
+                // Delete/insert/erase character operations are used by
+                // readline when editing in the middle of a command line.
+                b'P' => {
+                    let row = self.y * self.cols;
+                    let count = a.min(self.cols - self.x);
+                    self.cells.copy_within(
+                        row + self.x + count..row + self.cols,
+                        row + self.x,
+                    );
+                    self.cells[row + self.cols - count..row + self.cols].fill(blank);
+                }
+                b'@' => {
+                    let row = self.y * self.cols;
+                    let count = a.min(self.cols - self.x);
+                    self.cells.copy_within(
+                        row + self.x..row + self.cols - count,
+                        row + self.x + count,
+                    );
+                    self.cells[row + self.x..row + self.x + count].fill(blank);
+                }
+                b'X' => {
+                    let row = self.y * self.cols;
+                    let end = (self.x + a).min(self.cols);
+                    self.cells[row + self.x..row + end].fill(blank);
                 }
                 b'm' => {
                     let mut params = p.into_iter();
@@ -694,6 +723,20 @@ mod terminal {
             s.feed(b"hos$");
             assert_eq!(s.cells[0].c, 'h');
             assert_eq!(s.cells[4].c, ' ');
+        }
+        #[test]
+        fn readline_delete_does_not_leave_insert_mode_artifacts() {
+            let mut s = Screen::new(8, 1);
+            s.feed(b"abc\x1b[D\x1b[D\x1b[1P");
+            assert_eq!(s.cells[..3].iter().map(|cell| cell.c).collect::<String>(), "ac ");
+            assert_eq!(s.x, 1);
+
+            // Backspace is cursor motion; the erase is a separate redraw
+            // operation. This is the sequence readline uses around edits.
+            let mut s = Screen::new(8, 1);
+            s.feed(b"abc\x1b[D\x08\x1b[K");
+            assert_eq!(s.cells[..3].iter().map(|cell| cell.c).collect::<String>(), "a  ");
+            assert_eq!(s.x, 1);
         }
         #[test]
         fn ansi_scroll_resize() {
