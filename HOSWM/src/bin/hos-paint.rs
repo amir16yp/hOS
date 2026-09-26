@@ -2,7 +2,7 @@
 //! used to ship with.
 //!
 //! ```text
-//! hos-paint [FILE.qoi]
+//! hos-paint [FILE.qoi] [--size WIDTHxHEIGHT]
 //! ```
 //!
 //! Tools down the left, colors along the bottom, and the picture in between.
@@ -37,6 +37,8 @@ const STATUS_H: i32 = 16;
 const PALETTE_H: i32 = 44;
 const CANVAS_W: usize = 640;
 const CANVAS_H: usize = 400;
+const MAX_IMAGE_DIMENSION: usize = 8192;
+const MAX_IMAGE_PIXELS: usize = 16 * 1024 * 1024;
 const SIZES: [i32; 4] = [1, 2, 4, 8];
 
 const MENU_NEW: u32 = 1;
@@ -352,6 +354,26 @@ struct Drag {
     from: (i32, i32),
     to: (i32, i32),
 }
+
+#[derive(Clone, Debug)]
+struct NewDialog {
+    width: String,
+    height: String,
+    focus: usize,
+    error: String,
+}
+
+impl NewDialog {
+    fn new(width: usize, height: usize) -> Self {
+        Self {
+            width: width.to_string(),
+            height: height.to_string(),
+            focus: 0,
+            error: String::new(),
+        }
+    }
+}
+
 pub struct Paint {
     pub picture: Picture,
     pub path: Option<PathBuf>,
@@ -373,6 +395,7 @@ pub struct Paint {
     pub wants_color: Option<bool>,
     /// Save requested by a key or menu event; true writes a new copy.
     wants_save: Option<bool>,
+    new_dialog: Option<NewDialog>,
 }
 /// The 28 colors along the bottom, in two rows of fourteen.
 const PALETTE: [u32; 28] = [
@@ -399,6 +422,7 @@ impl Paint {
             quit: false,
             wants_color: None,
             wants_save: None,
+            new_dialog: None,
         }
     }
     /// The area the picture is drawn in, which the window size decides.
@@ -470,13 +494,95 @@ impl Paint {
         self.drag = None;
         self.status = format!("{} tool", tool.name());
     }
-    pub fn new_picture(&mut self) {
-        self.picture = Picture::blank(CANVAS_W, CANVAS_H, self.background);
+    fn replace_picture(&mut self, width: usize, height: usize) {
+        self.picture = Picture::blank(width, height, self.background);
         self.undo.clear();
         self.path = None;
         self.modified = false;
         self.scroll = (0, 0);
         self.status = "New picture".into();
+    }
+    pub fn new_picture(&mut self) {
+        self.replace_picture(CANVAS_W, CANVAS_H);
+    }
+    fn open_new_dialog(&mut self) {
+        self.new_dialog = Some(NewDialog::new(
+            self.picture.width() as usize,
+            self.picture.height() as usize,
+        ));
+    }
+    fn create_from_new_dialog(&mut self) {
+        let Some(dialog) = &self.new_dialog else {
+            return;
+        };
+        let result = image_dimensions(&dialog.width, &dialog.height);
+        match result {
+            Ok((width, height)) => {
+                self.replace_picture(width, height);
+                self.new_dialog = None;
+            }
+            Err(error) => {
+                if let Some(dialog) = &mut self.new_dialog {
+                    dialog.error = error;
+                }
+            }
+        }
+    }
+    fn new_dialog_key(&mut self, text: &str) {
+        if self.new_dialog.is_none() {
+            return;
+        }
+        match text {
+            "\u{1b}" => self.new_dialog = None,
+            "\r" | "\n" => self.create_from_new_dialog(),
+            _ => {
+                let Some(dialog) = &mut self.new_dialog else {
+                    return;
+                };
+                match text {
+                    "\t" => dialog.focus = (dialog.focus + 1) % 2,
+                    "\u{8}" | "\u{7f}" => {
+                        let value = if dialog.focus == 0 {
+                            &mut dialog.width
+                        } else {
+                            &mut dialog.height
+                        };
+                        value.pop();
+                    }
+                    value if value.chars().all(|c| c.is_ascii_digit()) && !value.is_empty() => {
+                        let field = if dialog.focus == 0 {
+                            &mut dialog.width
+                        } else {
+                            &mut dialog.height
+                        };
+                        if field.len() < 5 {
+                            field.push_str(value);
+                        }
+                    }
+                    _ => return,
+                }
+                dialog.error.clear();
+            }
+        }
+    }
+    fn new_dialog_click(&mut self, width: i32, height: i32, x: i32, y: i32) {
+        let (dialog, fields, ok, cancel) = new_dialog_layout(width, height);
+        if self.new_dialog.is_none() {
+            return;
+        }
+        if ok.contains(x, y) {
+            self.create_from_new_dialog();
+        } else if cancel.contains(x, y) || !dialog.contains(x, y) {
+            self.new_dialog = None;
+        } else if let Some(state) = &mut self.new_dialog {
+            if fields[0].contains(x, y) {
+                state.focus = 0;
+                state.error.clear();
+            } else if fields[1].contains(x, y) {
+                state.focus = 1;
+                state.error.clear();
+            }
+        }
     }
     /// Press, drag and release, in window coordinates. `button` is 1 for the
     /// left button and 2 for the right one, which paints with the background
@@ -640,7 +746,7 @@ impl Paint {
             _ if ctrl => match text.as_bytes() {
                 [19] | [b's'] | [b'S'] => self.wants_save = Some(false),
                 [26] => self.undo(),
-                [14] => self.new_picture(),
+                [14] => self.open_new_dialog(),
                 _ => (),
             },
             _ => {
@@ -841,8 +947,180 @@ impl Paint {
             let x = (width - text.chars().count() as i32 * 8 - 8).max(6);
             font.draw(surface, x, status_y + 4, &text, ACCENT);
         }
+        if let Some(dialog) = &self.new_dialog {
+            let (panel, fields, ok, cancel) = new_dialog_layout(width, height);
+            surface.fill_rect(0, 0, width, height, 0x99000000);
+            surface.fill_rect(panel.x, panel.y, panel.w, panel.h, PANEL);
+            surface.fill_rect(panel.x, panel.y, panel.w, 1, ACCENT);
+            font.draw(surface, panel.x + 16, panel.y + 16, "New image", TEXT);
+            font.draw(surface, panel.x + 16, panel.y + 42, "Width", DIM);
+            font.draw(surface, panel.x + 176, panel.y + 42, "Height", DIM);
+            for (index, field) in fields.iter().enumerate() {
+                let selected = dialog.focus == index;
+                surface.fill_rect(
+                    field.x,
+                    field.y,
+                    field.w,
+                    field.h,
+                    if selected { ACCENT } else { EDGE },
+                );
+                surface.fill_rect(
+                    field.x + 1,
+                    field.y + 1,
+                    field.w - 2,
+                    field.h - 2,
+                    0xff0b0f0e,
+                );
+                let value = if index == 0 {
+                    &dialog.width
+                } else {
+                    &dialog.height
+                };
+                font.draw(surface, field.x + 8, field.y + 7, value, TEXT);
+            }
+            if !dialog.error.is_empty() {
+                font.draw(
+                    surface,
+                    panel.x + 16,
+                    panel.y + 92,
+                    &dialog.error,
+                    0xffef6976,
+                );
+            }
+            for (button, label) in [(ok, "Create"), (cancel, "Cancel")] {
+                surface.fill_rect(button.x, button.y, button.w, button.h, EDGE);
+                surface.fill_rect(
+                    button.x + 1,
+                    button.y + 1,
+                    button.w - 2,
+                    button.h - 2,
+                    0xff0b0f0e,
+                );
+                font.draw(surface, button.x + 10, button.y + 7, label, TEXT);
+            }
+        }
     }
 }
+
+fn new_dialog_layout(width: i32, height: i32) -> (Rect, [Rect; 2], Rect, Rect) {
+    let panel = Rect {
+        x: (width - 330).max(4) / 2,
+        y: (height - 170).max(4) / 2,
+        w: 330,
+        h: 170,
+    };
+    let fields = [
+        Rect {
+            x: panel.x + 16,
+            y: panel.y + 52,
+            w: 140,
+            h: 28,
+        },
+        Rect {
+            x: panel.x + 174,
+            y: panel.y + 52,
+            w: 140,
+            h: 28,
+        },
+    ];
+    let ok = Rect {
+        x: panel.x + 174,
+        y: panel.y + 128,
+        w: 66,
+        h: 28,
+    };
+    let cancel = Rect {
+        x: panel.x + 248,
+        y: panel.y + 128,
+        w: 66,
+        h: 28,
+    };
+    (panel, fields, ok, cancel)
+}
+
+fn image_dimensions(width: &str, height: &str) -> Result<(usize, usize), String> {
+    let width = width
+        .parse::<usize>()
+        .map_err(|_| "Width must be a number".to_string())?;
+    let height = height
+        .parse::<usize>()
+        .map_err(|_| "Height must be a number".to_string())?;
+    if width == 0 || width > MAX_IMAGE_DIMENSION || height == 0 || height > MAX_IMAGE_DIMENSION {
+        return Err(format!("Size must be 1..{MAX_IMAGE_DIMENSION} pixels"));
+    }
+    if width
+        .checked_mul(height)
+        .is_none_or(|pixels| pixels > MAX_IMAGE_PIXELS)
+    {
+        return Err(format!("Image cannot exceed {MAX_IMAGE_PIXELS} pixels"));
+    }
+    Ok((width, height))
+}
+
+fn parse_size(value: &str) -> Result<(usize, usize), String> {
+    let (width, height) = value
+        .split_once('x')
+        .or_else(|| value.split_once('X'))
+        .ok_or_else(|| "Size must be WIDTHxHEIGHT".to_string())?;
+    image_dimensions(width, height)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PaintArgs {
+    path: Option<PathBuf>,
+    size: Option<(usize, usize)>,
+}
+
+fn parse_args<I>(arguments: I) -> Result<Option<PaintArgs>, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut path = None;
+    let mut size = None;
+    let mut width = None;
+    let mut height = None;
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        if argument == "--help" || argument == "-h" {
+            println!("Usage: hos-paint [FILE.qoi] [--size WIDTHxHEIGHT]");
+            println!("       hos-paint [FILE.qoi] [-w WIDTH] [--height HEIGHT]");
+            return Ok(None);
+        }
+        if let Some(value) = argument.strip_prefix("--size=") {
+            size = Some(parse_size(value)?);
+        } else if argument == "--size" || argument == "--new" {
+            size = Some(parse_size(
+                &arguments.next().ok_or("--size needs WIDTHxHEIGHT")?,
+            )?);
+        } else if let Some(value) = argument.strip_prefix("--width=") {
+            width = Some(value.to_string());
+        } else if argument == "--width" || argument == "-w" {
+            width = Some(arguments.next().ok_or("--width needs a value")?);
+        } else if let Some(value) = argument.strip_prefix("--height=") {
+            height = Some(value.to_string());
+        } else if argument == "--height" {
+            height = Some(arguments.next().ok_or("--height needs a value")?);
+        } else if path.is_none() {
+            path = Some(PathBuf::from(argument));
+        } else {
+            return Err(format!("unexpected argument: {argument}"));
+        }
+    }
+    if width.is_some() || height.is_some() {
+        if size.is_some() {
+            return Err("use --size or --width/--height, not both".into());
+        }
+        size = Some(image_dimensions(
+            &width.ok_or("--width and --height are both required")?,
+            &height.ok_or("--width and --height are both required")?,
+        )?);
+    }
+    if path.is_some() && size.is_some() {
+        return Err("an image size can only be used when creating a new picture".into());
+    }
+    Ok(Some(PaintArgs { path, size }))
+}
+
 impl Picture {
     pub fn from_image(image: &qoi::Image) -> Self {
         let mut surface = Surface::new(image.width.max(1), image.height.max(1));
@@ -917,14 +1195,10 @@ fn choose_color(current: u32) -> Result<Option<u32>, String> {
 }
 
 fn run() -> Result<(), String> {
-    let mut path = None;
-    for argument in std::env::args().skip(1) {
-        if argument == "--help" || argument == "-h" {
-            println!("Usage: hos-paint [FILE.qoi]");
-            return Ok(());
-        }
-        path = Some(PathBuf::from(argument));
-    }
+    let Some(arguments) = parse_args(std::env::args().skip(1))? else {
+        return Ok(());
+    };
+    let PaintArgs { path, size } = arguments;
     let client = Client::connect().map_err(|e| e.to_string())?;
     let picture = match &path {
         Some(path) => match qoi::load(path) {
@@ -939,7 +1213,10 @@ fn run() -> Result<(), String> {
                 return Err(format!("{}: {e}", path.display()));
             }
         },
-        None => Picture::blank(CANVAS_W, CANVAS_H, 0xffffffff),
+        None => {
+            let (width, height) = size.unwrap_or((CANVAS_W, CANVAS_H));
+            Picture::blank(width, height, 0xffffffff)
+        }
     };
     let mut app = Paint::new(picture, path);
     let pictures = hoswm::config::directory().join("paintings");
@@ -978,7 +1255,13 @@ fn run() -> Result<(), String> {
             };
             dirty = true;
             match kind {
-                6 => app.key(&text, control, w, h),
+                6 => {
+                    if app.new_dialog.is_some() {
+                        app.new_dialog_key(&text);
+                    } else {
+                        app.key(&text, control, w, h);
+                    }
+                }
                 8 => {
                     let mut parts = text.split_whitespace();
                     let x = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -987,6 +1270,12 @@ fn run() -> Result<(), String> {
                         .next()
                         .and_then(|v| v.parse::<u32>().ok())
                         .unwrap_or(0);
+                    if app.new_dialog.is_some() {
+                        if control == 1 && action == 1 {
+                            app.new_dialog_click(w, h, x, y);
+                        }
+                        continue;
+                    }
                     match (control, action) {
                         (1, 1) => app.press(w, h, x, y, 1),
                         (1, 0) => app.release(w, h, x, y, 1),
@@ -1011,7 +1300,7 @@ fn run() -> Result<(), String> {
                     }
                 }
                 11 => match control {
-                    MENU_NEW => app.new_picture(),
+                    MENU_NEW => app.open_new_dialog(),
                     MENU_RELOAD => match app.reload() {
                         Ok(()) => app.status = "Reloaded".into(),
                         Err(e) => app.status = e,
@@ -1099,6 +1388,38 @@ mod tests {
     use super::*;
     fn paint() -> Paint {
         Paint::new(Picture::blank(64, 48, 0xffffffff), None)
+    }
+    #[test]
+    fn new_image_sizes_are_checked() {
+        assert_eq!(image_dimensions("320", "200"), Ok((320, 200)));
+        assert!(image_dimensions("0", "200").is_err());
+        assert!(image_dimensions("8193", "1").is_err());
+        assert!(image_dimensions("4096", "4096").is_err());
+        assert_eq!(parse_size("800x600"), Ok((800, 600)));
+        assert!(parse_size("800").is_err());
+    }
+    #[test]
+    fn command_line_can_create_a_sized_picture() {
+        assert_eq!(
+            parse_args(vec!["--size".into(), "320x240".into()]),
+            Ok(Some(PaintArgs {
+                path: None,
+                size: Some((320, 240)),
+            }))
+        );
+        assert_eq!(
+            parse_args(vec![
+                "--width".into(),
+                "320".into(),
+                "--height".into(),
+                "240".into()
+            ]),
+            Ok(Some(PaintArgs {
+                path: None,
+                size: Some((320, 240)),
+            }))
+        );
+        assert!(parse_args(vec!["picture.qoi".into(), "--size".into(), "1x1".into()]).is_err());
     }
     #[test]
     fn strokes_shapes_and_fills_land_on_the_picture() {

@@ -17,9 +17,16 @@ const TITLE: i32 = 28;
 pub const MENUBAR: i32 = menu::HEIGHT;
 /// First row below the menu bar that a window may occupy.
 fn top(config: &Config) -> i32 {
-    if config.menubar { MENUBAR } else { 0 }
+    if config.menubar {
+        MENUBAR
+    } else {
+        0
+    }
 }
-/// Screen rows below the desktop belong to the dock.
+/// Default screen size used before the first frame tells the desktop its real
+/// dimensions. The runtime replaces this with the framebuffer size.
+const DEFAULT_SCREEN: (i32, i32) = (800, 600);
+#[cfg(test)]
 const FLOOR: i32 = 530;
 /// How far from a resizable window's edge the pointer grabs that edge. The
 /// band reaches the same distance outside the frame, so the thin border is
@@ -160,6 +167,8 @@ pub struct Desktop {
     next: u32,
     pub x: i32,
     pub y: i32,
+    screen_width: i32,
+    screen_height: i32,
     drag: Option<(u32, i32, i32)>,
     resize: Option<Resize>,
     pressed: Option<(u32, u32)>,
@@ -187,6 +196,12 @@ impl Default for Desktop {
     }
 }
 impl Desktop {
+    pub fn set_screen_size(&mut self, width: usize, height: usize) {
+        self.screen_width = width.max(1) as i32;
+        self.screen_height = height.max(1) as i32;
+        self.x = self.x.clamp(0, self.screen_width - 1);
+        self.y = self.y.clamp(0, self.screen_height - 1);
+    }
     pub fn cancel_control_interaction(&mut self, id: u32, cid: u32) {
         if self.selecting == Some((id, Some(cid))) {
             self.selecting = None;
@@ -250,7 +265,12 @@ impl Desktop {
                 return true;
             }
             Action::ScreenshotWindow => {
-                let focused = self.windows.iter().rev().find(|w| !w.minimized).map(|w| w.id);
+                let focused = self
+                    .windows
+                    .iter()
+                    .rev()
+                    .find(|w| !w.minimized)
+                    .map(|w| w.id);
                 self.open_menu = None;
                 self.screenshot = focused.map(Shot::Window);
                 if focused.is_none() {
@@ -351,7 +371,15 @@ impl Desktop {
             result
         };
         self.menu = Some(ContextMenu::new(
-            id, control, x, y, selected, editable, paste,
+            id,
+            control,
+            x,
+            y,
+            self.screen_width,
+            self.screen_height,
+            selected,
+            editable,
+            paste,
         ));
     }
     fn edit_action(&mut self, id: u32, cid: Option<u32>, action: Action) -> bool {
@@ -467,6 +495,8 @@ impl Desktop {
             next: 1,
             x: 400,
             y: 300,
+            screen_width: DEFAULT_SCREEN.0,
+            screen_height: DEFAULT_SCREEN.1,
             drag: None,
             resize: None,
             pressed: None,
@@ -509,9 +539,12 @@ impl Desktop {
         Rect {
             x: 12,
             y: top,
-            w: 776,
-            h: FLOOR - top,
+            w: self.screen_width - 24,
+            h: self.floor() - top,
         }
+    }
+    fn floor(&self) -> i32 {
+        self.screen_height - 70
     }
     /// Name shown at the left of the bar: the focused window, or the session.
     fn app_label(&self) -> String {
@@ -527,7 +560,8 @@ impl Desktop {
         let mut menus = vec![Menu::new(
             "System",
             vec![
-                MenuItem::new(SYSTEM_SCREENSHOT, "Take screenshot").shortcut(hint(Action::Screenshot)),
+                MenuItem::new(SYSTEM_SCREENSHOT, "Take screenshot")
+                    .shortcut(hint(Action::Screenshot)),
                 MenuItem::new(SYSTEM_SCREENSHOT_WINDOW, "Screenshot window")
                     .shortcut(hint(Action::ScreenshotWindow))
                     .enabled(self.windows.iter().any(|w| !w.minimized)),
@@ -535,9 +569,16 @@ impl Desktop {
                 MenuItem::new(SYSTEM_CLEAR_TOASTS, "Clear notifications")
                     .enabled(!self.toasts.is_empty()),
                 MenuItem::rule(),
-                MenuItem::new(SYSTEM_EXIT, if self.login_session { "Log out" } else { "Exit" })
-                    .shortcut(hint(Action::Exit))
-                    .enabled(!self.installing()),
+                MenuItem::new(
+                    SYSTEM_EXIT,
+                    if self.login_session {
+                        "Log out"
+                    } else {
+                        "Exit"
+                    },
+                )
+                .shortcut(hint(Action::Exit))
+                .enabled(!self.installing()),
             ],
         )];
         if let Some(window) = self.windows.iter().rev().find(|w| !w.minimized) {
@@ -574,9 +615,9 @@ impl Desktop {
         }
         let offset = (self.windows.len() % 6) as i32 * 20;
         let rect = Rect {
-            x: (50 + offset).min(800 - w - 4),
+            x: (50 + offset).min(self.screen_width - w - 4),
             y: (40 + offset)
-                .min(FLOOR - h - TITLE - 2)
+                .min(self.floor() - h - TITLE - 2)
                 .max(top(&self.config)),
             w: w + 4,
             h: h + TITLE + 2,
@@ -761,17 +802,21 @@ impl Desktop {
     fn dock_slots(&self) -> Vec<(Rect, Slot)> {
         let items = self.config.dock.len();
         let count = items + self.windows.len();
-        let step = if count == 0 { 0 } else { (760 / count as i32).min(54) };
+        let step = if count == 0 {
+            0
+        } else {
+            (760 / count as i32).min(54)
+        };
         if step <= 4 {
             return Vec::new();
         }
-        let start = (800 - count as i32 * step) / 2;
+        let start = (self.screen_width - count as i32 * step) / 2;
         (0..count)
             .map(|i| {
                 (
                     Rect {
                         x: start + i as i32 * step,
-                        y: 550,
+                        y: self.screen_height - 50,
                         w: step - 4,
                         h: 40,
                     },
@@ -785,12 +830,16 @@ impl Desktop {
             .collect()
     }
     fn dock_hover(&self) -> Option<usize> {
-        if !(550..590).contains(&self.y) {
+        if !(self.screen_height - 50..self.screen_height - 10).contains(&self.y) {
             return None;
         }
         let count = self.config.dock.len() + self.windows.len();
-        let step = if count == 0 { 0 } else { (760 / count as i32).min(54) };
-        let x = self.x - (800 - count as i32 * step) / 2;
+        let step = if count == 0 {
+            0
+        } else {
+            (760 / count as i32).min(54)
+        };
+        let x = self.x - (self.screen_width - count as i32 * step) / 2;
         if step <= 4 || x < 0 || x >= count as i32 * step || x % step >= step - 4 {
             None
         } else {
@@ -800,17 +849,19 @@ impl Desktop {
     /// True when motion changes scene content as well as the cursor.
     pub fn motion(&mut self, x: i32, y: i32) -> bool {
         let old_hover = self.dock_hover();
-        self.x = x.clamp(0, 799);
-        self.y = y.clamp(0, 599);
+        self.x = x.clamp(0, self.screen_width - 1);
+        self.y = y.clamp(0, self.screen_height - 1);
         if let Some((id, control)) = self.selecting {
             self.select_at(id, control, false);
         }
         if let Some((id, dx, dy)) = self.drag {
             let (x, y) = (self.x - dx, self.y - dy);
             let floor = top(&self.config);
+            let screen_width = self.screen_width;
+            let floor_limit = self.floor();
             if let Some(w) = self.window(id) {
-                w.rect.x = x.clamp(0, 800 - w.rect.w);
-                w.rect.y = y.clamp(floor, FLOOR - w.rect.h);
+                w.rect.x = x.clamp(0, screen_width - w.rect.w);
+                w.rect.y = y.clamp(floor, floor_limit - w.rect.h);
             }
         }
         if let Some(resize) = self.resize {
@@ -876,7 +927,7 @@ impl Desktop {
                 rect.x = (start.x + dx).clamp(0, start.x + start.w - min_w);
                 rect.w = start.x + start.w - rect.x;
             }
-            1 => rect.w = (start.w + dx).clamp(min_w, 800 - start.x),
+            1 => rect.w = (start.w + dx).clamp(min_w, self.screen_width - start.x),
             _ => (),
         }
         match resize.vertical {
@@ -884,7 +935,7 @@ impl Desktop {
                 rect.y = (start.y + dy).clamp(ceiling, start.y + start.h - min_h);
                 rect.h = start.y + start.h - rect.y;
             }
-            1 => rect.h = (start.h + dy).clamp(min_h, FLOOR - start.y),
+            1 => rect.h = (start.h + dy).clamp(min_h, self.floor() - start.y),
             _ => (),
         }
         if let Some(w) = self.window(resize.window) {
@@ -928,7 +979,8 @@ impl Desktop {
                 }
                 if let Some(open) = self.open_menu.take() {
                     if let Some(menu) = menus.get(open) {
-                        let rect = menu.rect(menu::title_rects(&app, &menus)[open].x, 800);
+                        let rect =
+                            menu.rect(menu::title_rects(&app, &menus)[open].x, self.screen_width);
                         if let Some(index) = menu.hit(rect, self.x, self.y) {
                             self.activate_menu(open, menu.items[index].clone());
                         }
@@ -1004,6 +1056,8 @@ impl Desktop {
             return;
         }
         let ceiling = top(&self.config);
+        let screen_width = self.screen_width;
+        let floor = self.floor();
         let w = self.windows.last_mut().unwrap();
         let r = w.rect;
         if y < r.y + TITLE {
@@ -1017,8 +1071,8 @@ impl Desktop {
                     w.rect = Rect {
                         x: 0,
                         y: ceiling,
-                        w: 800,
-                        h: FLOOR - ceiling,
+                        w: screen_width,
+                        h: floor - ceiling,
                     };
                 }
                 w.resize();
@@ -1058,9 +1112,7 @@ impl Desktop {
         self.key_mod(bytes, 0);
     }
     pub fn key_mod(&mut self, bytes: &[u8], modifiers: u32) {
-        if bytes == b"\x1b"
-            && (self.menu.take().is_some() || self.open_menu.take().is_some())
-        {
+        if bytes == b"\x1b" && (self.menu.take().is_some() || self.open_menu.take().is_some()) {
             return;
         }
         let Some(w) = self.windows.iter_mut().rev().find(|w| !w.minimized) else {
@@ -1271,6 +1323,7 @@ impl Desktop {
         fb.draw_surface(0, 0, &self.background);
     }
     pub fn draw_scene(&mut self, fb: &mut Surface) {
+        self.set_screen_size(fb.width(), fb.height());
         self.draw_background(fb);
         let focused = self
             .windows
@@ -1375,7 +1428,7 @@ impl Desktop {
                 fb,
                 Rect {
                     x: first.x - 9,
-                    y: 542,
+                    y: self.screen_height - 58,
                     w: last.x + last.w - first.x + 18,
                     h: 56,
                 },
@@ -1386,7 +1439,7 @@ impl Desktop {
                 fb,
                 Rect {
                     x: first.x - 8,
-                    y: 543,
+                    y: self.screen_height - 57,
                     w: last.x + last.w - first.x + 16,
                     h: 54,
                 },
@@ -1446,7 +1499,7 @@ impl Desktop {
             if let Some(window) = window {
                 fb.fill_rect(
                     r.x + r.w / 2 - 2,
-                    593,
+                    self.screen_height - 7,
                     4,
                     2,
                     if window.minimized { 0xff65726b } else { color },
@@ -1455,9 +1508,10 @@ impl Desktop {
             if hover {
                 let label: String = label.chars().take(48).collect();
                 let width = label.chars().count() as i32 * 8 + 16;
-                let x = (r.x + r.w / 2 - width / 2).clamp(0, 800 - width);
-                fb.fill_rect(x, 518, width, 20, 0xff1e2823);
-                self.font.draw(fb, x + 8, 523, &label, 0xffeeeeee);
+                let x = (r.x + r.w / 2 - width / 2).clamp(0, self.screen_width - width);
+                let y = self.screen_height - 82;
+                fb.fill_rect(x, y, width, 20, 0xff1e2823);
+                self.font.draw(fb, x + 8, y + 5, &label, 0xffeeeeee);
             }
         }
         if let Some(menu) = &self.menu {
@@ -1478,7 +1532,8 @@ impl Desktop {
                 &self.clock,
             );
             if let Some(open) = self.open_menu.filter(|open| *open < menus.len()) {
-                let rect = menus[open].rect(menu::title_rects(&app, &menus)[open].x, 800);
+                let rect =
+                    menus[open].rect(menu::title_rects(&app, &menus)[open].x, self.screen_width);
                 menus[open].draw(fb, &self.font, rect, self.x, self.y);
             }
         }
@@ -1635,7 +1690,10 @@ mod tests {
         d.motion(titles[1].x + 4, 6);
         d.mouse(true);
         assert_eq!(d.open_menu, Some(1));
-        assert!(d.motion(titles[0].x + 4, 6), "an open menu tracks the pointer");
+        assert!(
+            d.motion(titles[0].x + 4, 6),
+            "an open menu tracks the pointer"
+        );
         assert_eq!(d.open_menu, Some(0));
         d.motion(titles[1].x + 4, 6);
         d.mouse(true);
@@ -1649,7 +1707,10 @@ mod tests {
         d.mouse(true);
         assert_eq!(d.open_menu, None);
         let event = d.window(id).unwrap().events.back().unwrap().clone();
-        assert_eq!((event.kind, event.control, event.text.as_str()), (11, 7, "Save"));
+        assert_eq!(
+            (event.kind, event.control, event.text.as_str()),
+            (11, 7, "Save")
+        );
         // Disabled items and separators queue nothing, and close the menu.
         d.motion(titles[1].x + 4, 6);
         d.mouse(true);
@@ -1752,9 +1813,7 @@ mod tests {
         assert_eq!(answer(&mut d, id).control, ANSWER_CANCEL);
         d.close(id);
         // Plain message boxes keep dismissing themselves.
-        let id = d
-            .message_box("Note".into(), "Done".into(), ACCENT)
-            .unwrap();
+        let id = d.message_box("Note".into(), "Done".into(), ACCENT).unwrap();
         d.key(b"\r");
         assert!(d.window(id).is_none());
         assert!(d.ask("t".into(), "m".into(), 9, SEVERITY_INFO).is_err());
@@ -1874,7 +1933,10 @@ item = Broken icon | /bin/x | X | 0xff112233 | missing.qoi
         let mut fb = Surface::new(800, 600);
         // No file: the desktop stays the flat background it has always been.
         let mut d = Desktop::with_config(config.clone());
-        assert!(d.config.warnings.is_empty(), "a missing wallpaper is normal");
+        assert!(
+            d.config.warnings.is_empty(),
+            "a missing wallpaper is normal"
+        );
         d.draw_scene(&mut fb);
         assert_eq!(fb.pixels()[400 * 800 + 400], BLACK);
         // An image of a different shape is scaled to cover the screen, so the

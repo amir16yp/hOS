@@ -72,6 +72,17 @@ impl Output {
             Self::Drm(d) => d.present(pixels),
         }
     }
+    fn size(&self) -> (usize, usize) {
+        match self {
+            Self::Framebuffer(d) => d.size(),
+            Self::Drm(_) => (800, 600),
+        }
+    }
+    fn set_source_size(&mut self, width: usize, height: usize) {
+        if let Self::Framebuffer(d) = self {
+            d.set_source_size(width, height);
+        }
+    }
     fn ready(&mut self) -> Result<bool, String> {
         match self {
             Self::Framebuffer(_) => Ok(true),
@@ -104,7 +115,10 @@ fn arm(reactor: &mut hoswm::reactor::Reactor, devices: &Devices, display: &Outpu
 fn greet(devices: &mut Devices, display: &mut Output) -> Result<(), String> {
     let mut greeter = hoswm::greeter::Greeter::default();
     let mut keyboard = Keyboard::default();
-    let mut surface = Surface::new(800, 600);
+    let (width, height) = display.size();
+    display.set_source_size(width, height);
+    greeter.set_screen_size(width, height);
+    let mut surface = Surface::new(width, height);
     let mut dirty = true;
     let mut pending = Vec::with_capacity(512);
     let mut reactor = hoswm::reactor::Reactor::default();
@@ -121,10 +135,10 @@ fn greet(devices: &mut Devices, display: &mut Output) -> Result<(), String> {
         }
         for &(kind, code, value) in &pending {
             match (kind, code) {
-                (2, 0) => greeter.x = greeter.x.saturating_add(value).clamp(0, 799),
-                (2, 1) => greeter.y = greeter.y.saturating_add(value).clamp(0, 599),
-                (input::ABSOLUTE, 0) => greeter.x = value.clamp(0, 799),
-                (input::ABSOLUTE, 1) => greeter.y = value.clamp(0, 599),
+                (2, 0) => greeter.x = greeter.x.saturating_add(value).clamp(0, width as i32 - 1),
+                (2, 1) => greeter.y = greeter.y.saturating_add(value).clamp(0, height as i32 - 1),
+                (input::ABSOLUTE, 0) => greeter.x = value.clamp(0, width as i32 - 1),
+                (input::ABSOLUTE, 1) => greeter.y = value.clamp(0, height as i32 - 1),
                 (1, 272) if value == 1 => greeter.click(),
                 (1, code) if code < 256 => {
                     if let Some(bytes) = keyboard.event(code, value) {
@@ -206,6 +220,8 @@ fn run() -> Result<(), String> {
     // No desktop, shell or application socket exists before authentication,
     // and the configuration belongs to the account that just logged in.
     let mut state = Desktop::with_config(Config::load());
+    let (screen_width, screen_height) = display.size();
+    state.set_screen_size(screen_width, screen_height);
     state.login_session = greeter;
     for warning in std::mem::take(&mut state.config.warnings) {
         eprintln!("HOSWM config: {warning}");
@@ -216,7 +232,10 @@ fn run() -> Result<(), String> {
             state.toast(change.message(), change.color(), 6000);
         }
     }
-    for (missing, kind) in [(!devices.has_keyboard(), "keyboard"), (!devices.has_pointer(), "mouse")] {
+    for (missing, kind) in [
+        (!devices.has_keyboard(), "keyboard"),
+        (!devices.has_pointer(), "mouse"),
+    ] {
         if missing {
             state.toast(format!("No {kind} connected yet"), 0xffe4c878, 8000);
         }
@@ -224,7 +243,9 @@ fn run() -> Result<(), String> {
     let mut keyboard = Keyboard::default();
     let mut server = abi::Server::bind().map_err(|e| format!("window ABI: {e}"))?;
     let mut applications: Vec<Child> = Vec::new();
-    let mut framebuffer = Surface::new(800, 600);
+    let (width, height) = display.size();
+    display.set_source_size(width, height);
+    let mut framebuffer = Surface::new(width, height);
     let mut dirty = true;
     let mut scene_dirty = true;
     let mut cursor = hoswm::cursor::SoftwareCursor::default();
@@ -283,7 +304,11 @@ fn run() -> Result<(), String> {
                     match action {
                         Some(Action::Exit) if !state.installing() => return Ok(()),
                         Some(Action::Exit) => {
-                            state.toast("Installation in progress; exit is disabled", 0xffe4c878, 0);
+                            state.toast(
+                                "Installation in progress; exit is disabled",
+                                0xffe4c878,
+                                0,
+                            );
                             scene_dirty = true;
                         }
                         Some(action) if state.shortcut(action) => scene_dirty = true,
@@ -415,7 +440,10 @@ mod tests {
         assert_eq!(image.pixels, frame.pixels());
         let rect = state.window_rect(id).unwrap();
         let window = qoi::load(screenshot(&state, &frame, Shot::Window(id)).unwrap()).unwrap();
-        assert_eq!((window.width, window.height), (rect.w as usize, rect.h as usize));
+        assert_eq!(
+            (window.width, window.height),
+            (rect.w as usize, rect.h as usize)
+        );
         state.close(id);
         assert!(screenshot(&state, &frame, Shot::Window(id)).is_err());
         std::fs::remove_dir_all(&dir).unwrap();

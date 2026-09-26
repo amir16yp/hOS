@@ -177,11 +177,17 @@ impl Layout {
         packed.to_le_bytes()
     }
 
-    fn viewport(&self) -> (usize, usize, usize, usize) {
-        let (w, h) = if self.width * 600 <= self.height * 800 {
-            (self.width, (self.width * 600 / 800).max(1))
+    fn viewport(&self, source_width: usize, source_height: usize) -> (usize, usize, usize, usize) {
+        let (w, h) = if self.width * source_height <= self.height * source_width {
+            (
+                self.width,
+                (self.width * source_height / source_width).max(1),
+            )
         } else {
-            ((self.height * 800 / 600).max(1), self.height)
+            (
+                (self.height * source_width / source_height).max(1),
+                self.height,
+            )
         };
         (w, h, (self.width - w) / 2, (self.height - h) / 2)
     }
@@ -192,26 +198,39 @@ impl Layout {
         frame: &mut [u8],
         rows: &[std::ops::Range<usize>],
     ) -> Vec<(usize, usize, u64)> {
+        self.update_scaled(pixels, 800, 600, frame, rows)
+    }
+
+    fn update_scaled(
+        &self,
+        pixels: &[u32],
+        source_width: usize,
+        source_height: usize,
+        frame: &mut [u8],
+        rows: &[std::ops::Range<usize>],
+    ) -> Vec<(usize, usize, u64)> {
         let row_bytes = self.width * self.bytes;
-        let (w, h, left, top) = self.viewport();
+        let (w, h, left, top) = self.viewport(source_width, source_height);
         // Only encode and upload changed visible spans. Keep write(2) for
         // fbdev drivers that rely on it to notify shadow-buffer damage.
         let mut writes: Vec<(usize, usize, u64)> = Vec::new();
         for y in 0..h {
-            let sy = y * 600 / h;
+            let sy = y * source_height / h;
             let span = &rows[sy];
             if span.is_empty() {
                 continue;
             }
-            let x0 = (span.start * w).div_ceil(800);
-            let x1 = (span.end * w).div_ceil(800).min(w);
+            let x0 = (span.start * w).div_ceil(source_width);
+            let x1 = (span.end * w).div_ceil(source_width).min(w);
             if x0 == x1 {
                 continue;
             }
             let start = (top + y) * row_bytes + (left + x0) * self.bytes;
             let end = start + (x1 - x0) * self.bytes;
             for (x, dst) in (x0..x1).zip(frame[start..end].chunks_exact_mut(self.bytes)) {
-                dst.copy_from_slice(&self.encode(pixels[sy * 800 + x * 800 / w])[..self.bytes]);
+                dst.copy_from_slice(
+                    &self.encode(pixels[sy * source_width + x * source_width / w])[..self.bytes],
+                );
             }
             let offset = self.start + ((top + y) * self.pitch + (left + x0) * self.bytes) as u64;
             if let Some((previous_start, previous_end, previous_offset)) = writes.last_mut() {
@@ -228,11 +247,22 @@ impl Layout {
     }
 
     fn render(&self, src: &[u32], dst: &mut [u8]) {
-        let (w, h, left, top) = self.viewport();
+        self.render_scaled(src, dst, 800, 600)
+    }
+
+    fn render_scaled(
+        &self,
+        src: &[u32],
+        dst: &mut [u8],
+        source_width: usize,
+        source_height: usize,
+    ) {
+        let (w, h, left, top) = self.viewport(source_width, source_height);
         for y in 0..self.height {
             for x in 0..self.width {
                 let pixel = if x >= left && x < left + w && y >= top && y < top + h {
-                    src[((y - top) * 600 / h) * 800 + (x - left) * 800 / w]
+                    src[((y - top) * source_height / h) * source_width
+                        + (x - left) * source_width / w]
                 } else {
                     0xff000000
                 };
@@ -284,6 +314,8 @@ pub struct Display {
     _console: Console,
     damage: crate::damage::Damage,
     initialized: bool,
+    source_width: usize,
+    source_height: usize,
 }
 impl Display {
     pub fn open(path: &str) -> Result<Self, String> {
@@ -311,18 +343,39 @@ impl Display {
             _console: console,
             damage: crate::damage::Damage::new(),
             initialized: false,
+            source_width: 800,
+            source_height: 600,
         })
     }
 
+    pub fn size(&self) -> (usize, usize) {
+        (self.layout.width, self.layout.height)
+    }
+
+    pub fn set_source_size(&mut self, width: usize, height: usize) {
+        self.source_width = width;
+        self.source_height = height;
+        self.damage = crate::damage::Damage::with_size(width, height);
+        self.initialized = false;
+    }
+
     pub fn present(&mut self, pixels: &[u32]) -> Result<(), String> {
-        if pixels.len() != 800 * 600 {
-            return Err("expected an 800x600 surface".into());
+        if pixels.len() != self.source_width * self.source_height {
+            return Err(format!(
+                "expected a {}x{} surface",
+                self.source_width, self.source_height
+            ));
         }
         let rows = self.damage.rows(pixels);
         let l = &self.layout;
         let row_bytes = l.width * l.bytes;
         if !self.initialized {
-            l.render(pixels, &mut self.frame);
+            l.render_scaled(
+                pixels,
+                &mut self.frame,
+                self.source_width,
+                self.source_height,
+            );
             if row_bytes == l.pitch {
                 self.file
                     .write_all_at(&self.frame, l.start)
@@ -336,7 +389,13 @@ impl Display {
             }
             self.initialized = true;
         } else {
-            let writes = l.update(pixels, &mut self.frame, &rows);
+            let writes = l.update_scaled(
+                pixels,
+                self.source_width,
+                self.source_height,
+                &mut self.frame,
+                &rows,
+            );
             for (start, end, offset) in writes {
                 self.file
                     .write_all_at(&self.frame[start..end], offset)

@@ -12,6 +12,8 @@ impl ContextMenu {
         control: Option<u32>,
         x: i32,
         y: i32,
+        screen_width: i32,
+        screen_height: i32,
         selected: bool,
         editable: bool,
         paste: bool,
@@ -20,8 +22,8 @@ impl ContextMenu {
             window,
             control,
             rect: Rect {
-                x: x.clamp(0, 800 - 176),
-                y: y.clamp(0, 600 - 120),
+                x: x.clamp(0, screen_width - 176),
+                y: y.clamp(0, screen_height - 120),
                 w: 176,
                 h: 120,
             },
@@ -71,7 +73,7 @@ mod tests {
     use super::*;
     #[test]
     fn menu_clamps_and_disables_destructive_actions_for_readonly_text() {
-        let m = ContextMenu::new(1, None, 799, 599, true, false, true);
+        let m = ContextMenu::new(1, None, 799, 599, 800, 600, true, false, true);
         assert_eq!(m.rect.x + m.rect.w, 800);
         assert_eq!(m.rect.y + m.rect.h, 600);
         assert_eq!(m.hit(m.rect.x + 5, m.rect.y + 5), Some(Action::Copy));

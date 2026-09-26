@@ -194,6 +194,8 @@ pub struct Greeter {
     field: usize,
     pub x: i32,
     pub y: i32,
+    screen_width: i32,
+    screen_height: i32,
     pub submitted: bool,
     status: &'static str,
     retry_at: Instant,
@@ -206,6 +208,8 @@ impl Default for Greeter {
             field: 0,
             x: 400,
             y: 300,
+            screen_width: 800,
+            screen_height: 600,
             submitted: false,
             status: "Enter your username and password.",
             retry_at: Instant::now(),
@@ -213,6 +217,18 @@ impl Default for Greeter {
     }
 }
 impl Greeter {
+    pub fn set_screen_size(&mut self, width: usize, height: usize) {
+        self.screen_width = width.max(1) as i32;
+        self.screen_height = height.max(1) as i32;
+        self.x = self.x.clamp(0, self.screen_width - 1);
+        self.y = self.y.clamp(0, self.screen_height - 1);
+    }
+    fn card(&self) -> (i32, i32) {
+        (
+            (self.screen_width - 416) / 2,
+            (self.screen_height - 326) / 2,
+        )
+    }
     fn clear_password(&mut self) {
         for byte in &mut self.password {
             // Do not leave the plaintext behind when clearing the field.
@@ -254,11 +270,12 @@ impl Greeter {
         }
     }
     pub fn click(&mut self) {
-        if (224..576).contains(&self.x) {
+        let (left, top) = self.card();
+        if (left + 32..left + 384).contains(&self.x) {
             match self.y {
-                238..=271 => self.field = 0,
-                306..=339 => self.field = 1,
-                364..=401 => self.submitted = true,
+                y if (top + 106..=top + 139).contains(&y) => self.field = 0,
+                y if (top + 174..=top + 207).contains(&y) => self.field = 1,
+                y if (top + 232..=top + 269).contains(&y) => self.submitted = true,
                 _ => (),
             }
         }
@@ -282,15 +299,17 @@ impl Greeter {
     }
     pub fn draw(&self, surface: &mut Surface) {
         let font = Font::builtin();
+        let (left, top) = self.card();
         surface.pixels_mut().fill(0xff101815);
-        surface.fill_rect(192, 132, 416, 326, 0xff080c0a);
-        surface.fill_rect(192, 132, 416, 3, ACCENT);
-        font.draw(surface, 224, 166, "hOS", ACCENT);
-        font.draw(surface, 224, 190, "Sign in", 0xffeeeeee);
-        for (index, label, y) in [(0, "Username", 238), (1, "Password", 306)] {
-            font.draw(surface, 224, y - 20, label, 0xffb7c9bf);
+        surface.fill_rect(left, top, 416, 326, 0xff080c0a);
+        surface.fill_rect(left, top, 416, 3, ACCENT);
+        font.draw(surface, left + 32, top + 34, "hOS", ACCENT);
+        font.draw(surface, left + 32, top + 58, "Sign in", 0xffeeeeee);
+        for (index, label, offset) in [(0, "Username", 106), (1, "Password", 174)] {
+            let y = top + offset;
+            font.draw(surface, left + 32, y - 20, label, 0xffb7c9bf);
             surface.fill_rect(
-                224,
+                left + 32,
                 y,
                 352,
                 34,
@@ -300,17 +319,17 @@ impl Greeter {
                     0xff42564b
                 },
             );
-            surface.fill_rect(225, y + 1, 350, 32, 0xff101815);
+            surface.fill_rect(left + 33, y + 1, 350, 32, 0xff101815);
             let value = if index == 0 {
                 self.username.clone()
             } else {
                 "*".repeat(self.password.len())
             };
             let start = value.len().saturating_sub(40);
-            font.draw(surface, 234, y + 12, &value[start..], 0xffeeeeee);
+            font.draw(surface, left + 42, y + 12, &value[start..], 0xffeeeeee);
             if self.field == index {
                 surface.fill_rect(
-                    234 + ((value.len() - start) * 8) as i32,
+                    left + 42 + ((value.len() - start) * 8) as i32,
                     y + 11,
                     1,
                     12,
@@ -318,16 +337,16 @@ impl Greeter {
                 );
             }
         }
-        surface.fill_rect(224, 364, 352, 38, ACCENT);
-        font.draw(surface, 372, 379, "Sign in", 0xff08110c);
+        surface.fill_rect(left + 32, top + 232, 352, 38, ACCENT);
+        font.draw(surface, left + 148, top + 247, "Sign in", 0xff08110c);
         font.draw(
             surface,
-            224,
-            422,
+            left + 32,
+            top + 290,
             "Tab to switch fields. Enter to sign in.",
             0xffb7c9bf,
         );
-        font.draw(surface, 200, 480, self.status, 0xffdddddd);
+        font.draw(surface, left + 8, top + 348, self.status, 0xffdddddd);
         for offset in 0..12 {
             surface.fill_rect(self.x, self.y + offset, 1 + offset / 2, 1, 0xffffffff);
         }
@@ -354,30 +373,26 @@ mod tests {
             assert!(account(PASSWD, SHADOW, name, 20000).is_none());
         }
         for hash in ["", "!", "*", "!$6$salt$hash", "$y$salt$hash"] {
-            assert!(
-                account(
-                    PASSWD,
-                    &SHADOW.replace("$6$salt$hash", hash),
-                    "alice",
-                    20000
-                )
-                .is_none()
-            );
+            assert!(account(
+                PASSWD,
+                &SHADOW.replace("$6$salt$hash", hash),
+                "alice",
+                20000
+            )
+            .is_none());
         }
         for dates in [
             "0:0:99999:7:::",
             "19000:0:10:7:::",
             "19000:0:99999:7::19999:",
         ] {
-            assert!(
-                account(
-                    PASSWD,
-                    &SHADOW.replace("19000:0:99999:7:::", dates),
-                    "alice",
-                    20000
-                )
-                .is_none()
-            );
+            assert!(account(
+                PASSWD,
+                &SHADOW.replace("19000:0:99999:7:::", dates),
+                "alice",
+                20000
+            )
+            .is_none());
         }
     }
     #[test]

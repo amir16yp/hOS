@@ -1,23 +1,28 @@
 //! Exact scanline damage against the last successfully presented logical frame.
 pub(crate) struct Damage {
     previous: Vec<u32>,
+    width: usize,
     valid: bool,
 }
 impl Damage {
     pub fn new() -> Self {
+        Self::with_size(800, 600)
+    }
+    pub fn with_size(width: usize, height: usize) -> Self {
         Self {
-            previous: vec![0; 800 * 600],
+            previous: vec![0; width * height],
+            width,
             valid: false,
         }
     }
     pub fn rows(&self, pixels: &[u32]) -> Vec<std::ops::Range<usize>> {
         assert_eq!(pixels.len(), self.previous.len());
         pixels
-            .chunks_exact(800)
-            .zip(self.previous.chunks_exact(800))
+            .chunks_exact(self.width)
+            .zip(self.previous.chunks_exact(self.width))
             .map(|(new, old)| {
                 if !self.valid {
-                    return 0..800;
+                    return 0..self.width;
                 }
                 // Slice equality uses the platform's optimized memory comparison.
                 if new == old {
